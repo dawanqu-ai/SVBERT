@@ -35,6 +35,8 @@ def ner_parse(text,label):
     words_list = []
     word_idx = 0
     for i in range(len(text)):
+        if i >= len(label):
+            break
         if text[i][:2] == "##" and len(words_list) > 0:
             words_list[-1]["subword"].append(text[i][2:])
         else:

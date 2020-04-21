@@ -81,11 +81,16 @@ class DcInference():
         with torch.no_grad():
             logits = model(all_input_ids, all_segment_ids, all_input_mask)
 
-        pred = logits.detach().cpu().numpy()
-        pred = np.argmax(pred, axis=1)
+        def get_score(scores):
+            scores = scores - scores.min()
+            scores = scores / scores.sum()
+            return dict([(label_map[str(i)], score) for i, score in enumerate(scores)])
+        pred_scores = logits.detach().cpu().numpy()
+        pred = np.argmax(pred_scores, axis=1)
         labels = [label_map[str(x)] for x in pred]
+        pred_scores = [get_score(x) for x in pred_scores]
 
-        return labels
+        return labels,pred_scores
 
     def convert_text_to_feature(self, texts, max_seq_length):
         tokenizer = self.tokenizer
@@ -128,19 +133,25 @@ class DcInference():
 
         if isinstance(texts, str):
             texts = [texts]
-            labels = self._inference(texts)
-            result = "unknown"
+            labels,pred_scores = self._inference(texts)
+            result = {
+                "text":texts,
+                "label":"unknown",
+                "score":0
+            }
             if len(labels) > 0:
-                result = labels[0]
+                result["label"] = labels[0]
+                result["score"] = pred_scores[0]
             if print_msg is True:
                 print(result)
             return result
         elif isinstance(texts, list):
-            labels = self._inference(texts)
+            labels,pred_scores = self._inference(texts)
             result = [{
                 "text":text,
-                "label":label
-            } for text,label in zip(texts, labels)]
+                "label":label,
+                "score":pred_score
+            } for text,label,pred_score in zip(texts, labels, pred_scores)]
             if print_msg is True:
                 print(result)
             return result
