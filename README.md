@@ -45,3 +45,14 @@ model.inference(text_a="ماذا نقصد بالباستا فلورا؟",text_b=
 model.inference(texts=[["ماذا نقصد بالباستا فلورا؟","ما تعريف الباستا فلورا؟"]])
 #[{"text":["ماذا نقصد بالباستا فلورا؟","ما تعريف الباستا فلورا؟"],"label":"1","score":{"1":0.9,"0":0.1}]
 ```
+
+
+## Summary
+```
+from summary import SummaryInference
+word2vec_path = "ar_wiki_word2vec.txt"
+model = SummaryInference(w2v_model_path = word2vec_path , device='cpu')
+result = model.inference(text)
+text = [{"title":"يوتيوب-يطلق-نظام-الاشتراكات-الشهرية-في-22-أكتوبر	يوتيوب يطل","text":"يوتيوب يطلق نظام الاشتراكات الشهرية في 22 أكتوبر  يستعد موقع يوتيوب Youtube"},{"title":"","text":""} ··· ]
+# [{"text":"يوتيوب يطلق نظام الاشتراكات الشهرية في 22 أكتوبر  يستعد موقع يوتيوب Youtube ···","summary":"يوتيوب يطلق نظام الاشتراكات الشهرية في 22 أكتوبر  يستعد موقع يوتيوب Youtube ···"},{"text":"","summary":""} ··· ]
+```
