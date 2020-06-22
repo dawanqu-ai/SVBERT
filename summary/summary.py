@@ -1091,30 +1091,5 @@ class SummaryInference():
             return result
         else:
             print("Input format error")
-def main():
-    save = open("save.txt","w")
-    text_ = {"text":"ووفقا لتقرير KFile لـCNN فإن تاتا كان له تاريخ بنشر 'الإسلاموفوبيا' ضد عدد من الشخصيات الديمقراطية بما في ذلك مزاعم أن الرئيس الأمريكي السابق، باراك أوباما مسلم.إذا مرر مجلس الشيوخ الأمريكي تاتا فإنه سيصبح مشرفا على سياسات البنتاغون في منصبه الجديد، بما في ذلك من شؤون الأمن الوطني واستراتيجية الدفاع والردع النووي وسياسات الدفاع الصاروخية بالإضافة على سياسات وخطط التعاون الأمني وغيرها.المتحدث باسم السيناتور جاك ريد الذي يعتبر أرفع عضو ديمقراطي في لجنة الشؤون العسكرية التابعة لمجلس الشيوخ والتي تشرف على ترشيح تاتا، قال في بيان إنه سيعارض اختياره لهذا المنصب.بالإضافة إلى ريد عبّر مشرعون مثل إليزابيث وارن وريتشارد بلومنتال وغاري بيترس وكريستين غيليبراند لـCNN أنهم سيعارضون اختيار تاتا للمنصب، حيث قالت وارن لشبكتنا: 'متآمر إسلاموفوبي وصف الرئيس أوباما بالقائد الإرهابي لا يجب أن يكون الرقم 3 في البنتاغون.."}
-    text_1 = open("test.tsv","r").readlines()
-    text = []
-    for line in text_1:
-        line = line.strip().split("\t")
-        text.append({"text":line[1] , "title":line[0]})
-
-    word2vec_path = "ar_wiki_word2vec.txt"
-    summary = SummaryInference(w2v_model_path = word2vec_path)
-
-    import datetime
-    starttime = datetime.datetime.now()
-    result = summary.inference(text)
-    
-    endtime = datetime.datetime.now()
-    print(endtime - starttime)
-    for line in result:
-        save.write(line["text"] + "\t" + line["summary"] + "\n")
-    save.close()
-if __name__ == '__main__':
-    main()
-
-
 
 
