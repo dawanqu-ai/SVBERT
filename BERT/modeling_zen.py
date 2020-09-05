@@ -1,5 +1,5 @@
 # coding: utf-8
-# Copyright 2020 Sinovation Ventures AI Institute
+# Copyright 2019 Sinovation Ventures AI Institute
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,7 +12,27 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""PyTorch BERT model classes."""
+#
+# This file is partially derived from the code at
+# https://github.com/huggingface/transformers/tree/master/transformers
+#
+# Original copyright notice:
+#
+# Copyright 2018 The Google AI Language Team Authors and The HuggingFace Inc. team.
+# Copyright (c) 2018, NVIDIA CORPORATION.  All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+"""PyTorch ZEN model classes."""
 
 from __future__ import absolute_import, division, print_function, unicode_literals
 
@@ -174,9 +194,9 @@ def swish(x):
 ACT2FN = {"gelu": gelu, "relu": torch.nn.functional.relu, "swish": swish}
 
 
-class BertConfig(object):
+class ZenConfig(object):
 
-    """Configuration class to store the configuration of a `BertModel`.
+    """Configuration class to store the configuration of a `ZenModel`.
     """
 
     def __init__(self,
@@ -194,7 +214,7 @@ class BertConfig(object):
                  initializer_range=0.02,
                  layer_norm_eps=1e-12,
                  num_hidden_word_layers=6):
-        """Constructs BertConfig.
+        """Constructs ZenConfig.
 
         Args:
             vocab_size_or_config_json_file: Vocabulary size of `inputs_ids` in `BertModel`.
@@ -219,7 +239,8 @@ class BertConfig(object):
                 initializing all weight matrices.
             layer_norm_eps: The epsilon used by LayerNorm.
         """
-        if isinstance(vocab_size_or_config_json_file, str):
+        if isinstance(vocab_size_or_config_json_file, str) or (sys.version_info[0] == 2
+                                                               and isinstance(vocab_size_or_config_json_file, unicode)):
             with open(vocab_size_or_config_json_file, "r", encoding='utf-8') as reader:
                 json_config = json.loads(reader.read())
             for key, value in json_config.items():
@@ -246,7 +267,7 @@ class BertConfig(object):
     @classmethod
     def from_dict(cls, json_object):
         """Constructs a `BertConfig` from a Python dictionary of parameters."""
-        config = BertConfig(vocab_size_or_config_json_file=-1)
+        config = ZenConfig(vocab_size_or_config_json_file=-1)
         for key, value in json_object.items():
             config.__dict__[key] = value
         return config
@@ -393,7 +414,7 @@ class BertSelfAttention(nn.Module):
         value_layer = self.transpose_for_scores(mixed_value_layer)
 
         # Take the dot product between "query" and "key" to get the raw attention scores.
-        attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2))
+        attention_scores = torch.matmul(query_layer.float(), key_layer.transpose(-1, -2).float())
         attention_scores = attention_scores / math.sqrt(self.attention_head_size)
         # Apply the attention mask is (precomputed for all layers in BertModel forward() function)
         attention_scores = attention_scores + attention_mask
@@ -409,7 +430,7 @@ class BertSelfAttention(nn.Module):
         if head_mask is not None:
             attention_probs = attention_probs * head_mask
 
-        context_layer = torch.matmul(attention_probs, value_layer)
+        context_layer = torch.matmul(attention_probs.type_as(value_layer), value_layer)
         if self.keep_multihead_output:
             self.multihead_output = context_layer
             self.multihead_output.retain_grad()
@@ -475,7 +496,7 @@ class BertIntermediate(nn.Module):
     def __init__(self, config):
         super(BertIntermediate, self).__init__()
         self.dense = nn.Linear(config.hidden_size, config.intermediate_size)
-        if isinstance(config.hidden_act, str):
+        if isinstance(config.hidden_act, str) or (sys.version_info[0] == 2 and isinstance(config.hidden_act, unicode)):
             self.intermediate_act_fn = ACT2FN[config.hidden_act]
         else:
             self.intermediate_act_fn = config.hidden_act
@@ -520,24 +541,33 @@ class BertLayer(nn.Module):
         return layer_output
 
 
-class BertEncoder(nn.Module):
+class ZenEncoder(nn.Module):
     def __init__(self, config, output_attentions=False, keep_multihead_output=False):
-        super(BertEncoder, self).__init__()
+        super(ZenEncoder, self).__init__()
         self.output_attentions = output_attentions
         layer = BertLayer(config, output_attentions=output_attentions,
                           keep_multihead_output=keep_multihead_output)
         self.layer = nn.ModuleList([copy.deepcopy(layer) for _ in range(config.num_hidden_layers)])
+        self.word_layers = nn.ModuleList([copy.deepcopy(layer) for _ in range(config.num_hidden_word_layers)])
         self.num_hidden_word_layers = config.num_hidden_word_layers
 
-    def forward(self, hidden_states, attention_mask, output_all_encoded_layers=True, head_mask=None):
+    def forward(self, hidden_states, ngram_hidden_states, ngram_position_matrix, attention_mask,
+                ngram_attention_mask,
+                output_all_encoded_layers=True, head_mask=None):
         # Need to check what is the attention masking doing here
         all_encoder_layers = []
         all_attentions = []
+        num_hidden_ngram_layers = self.num_hidden_word_layers
         for i, layer_module in enumerate(self.layer):
             hidden_states = layer_module(hidden_states, attention_mask, head_mask[i])
+            if i < num_hidden_ngram_layers:
+                ngram_hidden_states = self.word_layers[i](ngram_hidden_states, ngram_attention_mask, head_mask[i])
+                if self.output_attentions:
+                    ngram_attentions, ngram_hidden_states = ngram_hidden_states
             if self.output_attentions:
                 attentions, hidden_states = hidden_states
                 all_attentions.append(attentions)
+            hidden_states += torch.bmm(ngram_position_matrix.float(), ngram_hidden_states.float())
             if output_all_encoded_layers:
                 all_encoder_layers.append(hidden_states)
         if not output_all_encoded_layers:
@@ -566,7 +596,7 @@ class BertPredictionHeadTransform(nn.Module):
     def __init__(self, config):
         super(BertPredictionHeadTransform, self).__init__()
         self.dense = nn.Linear(config.hidden_size, config.hidden_size)
-        if isinstance(config.hidden_act, str):
+        if isinstance(config.hidden_act, str) or (sys.version_info[0] == 2 and isinstance(config.hidden_act, unicode)):
             self.transform_act_fn = ACT2FN[config.hidden_act]
         else:
             self.transform_act_fn = config.hidden_act
@@ -598,9 +628,9 @@ class BertLMPredictionHead(nn.Module):
         return hidden_states
 
 
-class BertOnlyMLMHead(nn.Module):
+class ZenOnlyMLMHead(nn.Module):
     def __init__(self, config, bert_model_embedding_weights):
-        super(BertOnlyMLMHead, self).__init__()
+        super(ZenOnlyMLMHead, self).__init__()
         self.predictions = BertLMPredictionHead(config, bert_model_embedding_weights)
 
     def forward(self, sequence_output):
@@ -608,9 +638,9 @@ class BertOnlyMLMHead(nn.Module):
         return prediction_scores
 
 
-class BertOnlyNSPHead(nn.Module):
+class ZenOnlyNSPHead(nn.Module):
     def __init__(self, config):
-        super(BertOnlyNSPHead, self).__init__()
+        super(ZenOnlyNSPHead, self).__init__()
         self.seq_relationship = nn.Linear(config.hidden_size, 2)
 
     def forward(self, pooled_output):
@@ -618,9 +648,9 @@ class BertOnlyNSPHead(nn.Module):
         return seq_relationship_score
 
 
-class BertPreTrainingHeads(nn.Module):
+class ZenPreTrainingHeads(nn.Module):
     def __init__(self, config, bert_model_embedding_weights):
-        super(BertPreTrainingHeads, self).__init__()
+        super(ZenPreTrainingHeads, self).__init__()
         self.predictions = BertLMPredictionHead(config, bert_model_embedding_weights)
         self.seq_relationship = nn.Linear(config.hidden_size, 2)
 
@@ -630,14 +660,14 @@ class BertPreTrainingHeads(nn.Module):
         return prediction_scores, seq_relationship_score
 
 
-class BertPreTrainedModel(nn.Module):
+class ZenPreTrainedModel(nn.Module):
     """ An abstract class to handle weights initialization and
         a simple interface for dowloading and loading pretrained models.
     """
 
     def __init__(self, config, *inputs, **kwargs):
-        super(BertPreTrainedModel, self).__init__()
-        if not isinstance(config, BertConfig):
+        super(ZenPreTrainedModel, self).__init__()
+        if not isinstance(config, ZenConfig):
             raise ValueError(
                 "Parameter config in `{}(config)` should be an instance of class `BertConfig`. "
                 "To create a model from a Google pretrained model use "
@@ -752,7 +782,7 @@ class BertPreTrainedModel(nn.Module):
             logger.info("loading configuration file {} from cache at {}".format(
                 config_file, resolved_config_file))
         # Load config
-        config = BertConfig.from_json_file(resolved_config_file)
+        config = ZenConfig.from_json_file(resolved_config_file)
         logger.info("Model config {}".format(config))
         # Instantiate model.
         model = cls(config, *inputs, **kwargs)
@@ -809,8 +839,8 @@ class BertPreTrainedModel(nn.Module):
         return model
 
 
-class BertModel(BertPreTrainedModel):
-    """BERT model ("BERT-based Chinese (Z) text encoder Enhanced by N-gram representations").
+class ZenModel(ZenPreTrainedModel):
+    """ZEN model ("BERT-based Chinese (Z) text encoder Enhanced by N-gram representations").
 
     Params:
         `config`: a BertConfig class instance with the configuration to build a new model
@@ -851,10 +881,11 @@ class BertModel(BertPreTrainedModel):
     """
 
     def __init__(self, config, output_attentions=False, keep_multihead_output=False):
-        super(BertModel, self).__init__(config)
+        super(ZenModel, self).__init__(config)
         self.output_attentions = output_attentions
         self.embeddings = BertEmbeddings(config)
-        self.encoder = BertEncoder(config, output_attentions=output_attentions,
+        self.word_embeddings = BertWordEmbeddings(config)
+        self.encoder = ZenEncoder(config, output_attentions=output_attentions,
                                    keep_multihead_output=keep_multihead_output)
         self.pooler = BertPooler(config)
         self.apply(self.init_bert_weights)
@@ -873,8 +904,12 @@ class BertModel(BertPreTrainedModel):
         return [layer.attention.self.multihead_output for layer in self.encoder.layer]
 
     def forward(self, input_ids,
+                input_ngram_ids,
+                ngram_position_matrix,
                 token_type_ids=None,
+                ngram_token_type_ids=None,
                 attention_mask=None,
+                ngram_attention_mask=None,
                 output_all_encoded_layers=True,
                 head_mask=None):
         if attention_mask is None:
@@ -882,12 +917,18 @@ class BertModel(BertPreTrainedModel):
         if token_type_ids is None:
             token_type_ids = torch.zeros_like(input_ids)
 
+        if ngram_attention_mask is None:
+            ngram_attention_mask = torch.ones_like(input_ngram_ids)
+        if ngram_token_type_ids is None:
+            ngram_token_type_ids = torch.zeros_like(input_ngram_ids)
+
         # We create a 3D attention mask from a 2D tensor mask.
         # Sizes are [batch_size, 1, 1, to_seq_length]
         # So we can broadcast to [batch_size, num_heads, from_seq_length, to_seq_length]
         # this attention mask is more simple than the triangular masking of causal attention
         # used in OpenAI GPT, we just need to prepare the broadcast dimension here.
         extended_attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
+        extended_ngram_attention_mask = ngram_attention_mask.unsqueeze(1).unsqueeze(2)
 
         # Since attention_mask is 1.0 for positions we want to attend and 0.0 for
         # masked positions, this operation will create a tensor which is 0.0 for
@@ -896,6 +937,9 @@ class BertModel(BertPreTrainedModel):
         # effectively the same as removing these entirely.
         extended_attention_mask = extended_attention_mask.to(dtype=next(self.parameters()).dtype)  # fp16 compatibility
         extended_attention_mask = (1.0 - extended_attention_mask) * -10000.0
+
+        extended_ngram_attention_mask = extended_ngram_attention_mask.to(dtype=next(self.parameters()).dtype)
+        extended_ngram_attention_mask = (1.0 - extended_ngram_attention_mask) * -10000.0
 
         # Prepare head mask if needed
         # 1.0 in head_mask indicate we keep the head
@@ -915,9 +959,13 @@ class BertModel(BertPreTrainedModel):
             head_mask = [None] * self.config.num_hidden_layers
 
         embedding_output = self.embeddings(input_ids, token_type_ids)
+        ngram_embedding_output = self.word_embeddings(input_ngram_ids, ngram_token_type_ids)
 
         encoded_layers = self.encoder(embedding_output,
+                                      ngram_embedding_output,
+                                      ngram_position_matrix,
                                       extended_attention_mask,
+                                      extended_ngram_attention_mask,
                                       output_all_encoded_layers=output_all_encoded_layers,
                                       head_mask=head_mask)
         if self.output_attentions:
@@ -931,9 +979,9 @@ class BertModel(BertPreTrainedModel):
         return encoded_layers, pooled_output
 
 
-class BertForPreTraining(BertPreTrainedModel):
-    """BERT model with pre-training heads.
-    This module comprises the BERT model followed by the two pre-training heads:
+class ZenForPreTraining(ZenPreTrainedModel):
+    """ZEN model with pre-training heads.
+    This module comprises the ZEN model followed by the two pre-training heads:
         - the masked language modeling head, and
         - the next sentence classification head.
 
@@ -978,20 +1026,26 @@ class BertForPreTraining(BertPreTrainedModel):
     """
 
     def __init__(self, config, output_attentions=False, keep_multihead_output=False):
-        super(BertForPreTraining, self).__init__(config)
+        super(ZenForPreTraining, self).__init__(config)
         self.output_attentions = output_attentions
-        self.bert = BertModel(config, output_attentions=output_attentions,
+        self.bert = ZenModel(config, output_attentions=output_attentions,
                               keep_multihead_output=keep_multihead_output)
-        self.cls = BertPreTrainingHeads(config, self.bert.embeddings.word_embeddings.weight)
+        self.cls = ZenPreTrainingHeads(config, self.bert.embeddings.word_embeddings.weight)
         self.apply(self.init_bert_weights)
 
-    def forward(self, input_ids, token_type_ids=None,
+    def forward(self, input_ids, input_ngram_ids, ngram_position_matrix, token_type_ids=None,
+                ngram_token_type_ids=None,
                 attention_mask=None,
+                ngram_attention_mask=None,
                 masked_lm_labels=None,
                 next_sentence_label=None, head_mask=None):
         outputs = self.bert(input_ids,
+                            input_ngram_ids,
+                            ngram_position_matrix,
                             token_type_ids,
+                            ngram_token_type_ids,
                             attention_mask,
+                            ngram_attention_mask,
                             output_all_encoded_layers=False, head_mask=head_mask)
         if self.output_attentions:
             all_attentions, sequence_output, pooled_output = outputs
@@ -1005,17 +1059,14 @@ class BertForPreTraining(BertPreTrainedModel):
             next_sentence_loss = loss_fct(seq_relationship_score.view(-1, 2), next_sentence_label.view(-1))
             total_loss = masked_lm_loss + next_sentence_loss
             return total_loss
-        elif masked_lm_labels is not None and next_sentence_label is None:
-            loss_fct = CrossEntropyLoss(ignore_index=-1)
-            return loss_fct(prediction_scores.view(-1, self.config.vocab_size), masked_lm_labels.view(-1))
         elif self.output_attentions:
             return all_attentions, prediction_scores, seq_relationship_score
         return prediction_scores, seq_relationship_score
 
 
-class BertForMaskedLM(BertPreTrainedModel):
-    """BERT model with the masked language modeling head.
-    This module comprises the BERT model followed by the masked language modeling head.
+class ZenForMaskedLM(ZenPreTrainedModel):
+    """ZEN model with the masked language modeling head.
+    This module comprises the ZEN model followed by the masked language modeling head.
 
     Params:
         `config`: a BertConfig class instance with the configuration to build a new model
@@ -1056,11 +1107,11 @@ class BertForMaskedLM(BertPreTrainedModel):
     """
 
     def __init__(self, config, output_attentions=False, keep_multihead_output=False):
-        super(BertForMaskedLM, self).__init__(config)
+        super(ZenForMaskedLM, self).__init__(config)
         self.output_attentions = output_attentions
-        self.bert = BertModel(config, output_attentions=output_attentions,
+        self.bert = ZenModel(config, output_attentions=output_attentions,
                               keep_multihead_output=keep_multihead_output)
-        self.cls = BertOnlyMLMHead(config, self.bert.embeddings.word_embeddings.weight)
+        self.cls = ZenOnlyMLMHead(config, self.bert.embeddings.word_embeddings.weight)
         self.apply(self.init_bert_weights)
 
     def forward(self, input_ids, input_ngram_ids, ngram_position_matrix, token_type_ids=None, attention_mask=None, masked_lm_labels=None, head_mask=None):
@@ -1082,9 +1133,9 @@ class BertForMaskedLM(BertPreTrainedModel):
         return prediction_scores
 
 
-class BertForNextSentencePrediction(BertPreTrainedModel):
-    """BERT model with next sentence prediction head.
-    This module comprises the BERT model followed by the next sentence classification head.
+class ZenForNextSentencePrediction(ZenPreTrainedModel):
+    """ZEN model with next sentence prediction head.
+    This module comprises the ZEN model followed by the next sentence classification head.
 
     Params:
         `config`: a BertConfig class instance with the configuration to build a new model
@@ -1107,6 +1158,10 @@ class BertForNextSentencePrediction(BertPreTrainedModel):
             0 => next sentence is the continuation, 1 => next sentence is a random sentence.
         `head_mask`: an optional torch.Tensor of shape [num_heads] or [num_layers, num_heads] with indices between 0 and 1.
             It's a mask to be used to nullify some heads of the transformer. 1.0 => head is fully masked, 0.0 => head is not masked.
+        `input_ngram_ids`: input_ids of ngrams.
+        `ngram_token_type_ids`: token_type_ids of ngrams.
+        `ngram_attention_mask`: attention_mask of ngrams.
+        `ngram_position_matrix`: position matrix of ngrams.
 
     Outputs:
         if `next_sentence_label` is not `None`:
@@ -1118,11 +1173,11 @@ class BertForNextSentencePrediction(BertPreTrainedModel):
     """
 
     def __init__(self, config, output_attentions=False, keep_multihead_output=False):
-        super(BertForNextSentencePrediction, self).__init__(config)
+        super(ZenForNextSentencePrediction, self).__init__(config)
         self.output_attentions = output_attentions
-        self.bert = BertModel(config, output_attentions=output_attentions,
+        self.bert = ZenModel(config, output_attentions=output_attentions,
                               keep_multihead_output=keep_multihead_output)
-        self.cls = BertOnlyNSPHead(config)
+        self.cls = ZenOnlyNSPHead(config)
         self.apply(self.init_bert_weights)
 
     def forward(self, input_ids, input_ngram_ids, ngram_position_matrix, token_type_ids=None, attention_mask=None, next_sentence_label=None, head_mask=None):
@@ -1144,9 +1199,9 @@ class BertForNextSentencePrediction(BertPreTrainedModel):
         return seq_relationship_score
 
 
-class BertForSequenceClassification(BertPreTrainedModel):
-    """BERT model for classification.
-    This module is composed of the BERT model with a linear layer on top of
+class ZenForSequenceClassification(ZenPreTrainedModel):
+    """ZEN model for classification.
+    This module is composed of the ZEN model with a linear layer on top of
     the pooled output.
 
     Params:
@@ -1185,18 +1240,18 @@ class BertForSequenceClassification(BertPreTrainedModel):
     """
 
     def __init__(self, config, num_labels=2, output_attentions=False, keep_multihead_output=False):
-        super(BertForSequenceClassification, self).__init__(config)
+        super(ZenForSequenceClassification, self).__init__(config)
         self.output_attentions = output_attentions
         self.num_labels = num_labels
-        self.bert = BertModel(config, output_attentions=output_attentions,
+        self.bert = ZenModel(config, output_attentions=output_attentions,
                               keep_multihead_output=keep_multihead_output)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         self.classifier = nn.Linear(config.hidden_size, num_labels)
         self.apply(self.init_bert_weights)
 
-    def forward(self, input_ids, token_type_ids=None, attention_mask=None, labels=None, head_mask=None,
-                input_ngram_ids=None, ngram_position_matrix=None):
-        outputs = self.bert(input_ids, token_type_ids, attention_mask,
+    def forward(self, input_ids, input_ngram_ids, ngram_position_matrix, token_type_ids=None, attention_mask=None, labels=None, head_mask=None):
+        outputs = self.bert(input_ids, input_ngram_ids, ngram_position_matrix, token_type_ids,
+                            attention_mask=attention_mask,
                             output_all_encoded_layers=False,
                             head_mask=head_mask)
         if self.output_attentions:
@@ -1214,9 +1269,9 @@ class BertForSequenceClassification(BertPreTrainedModel):
             return all_attentions, logits
         return logits
 
-class BertForTokenClassification(BertPreTrainedModel):
-    """BERT model for token-level classification.
-    This module is composed of the BERT model with a linear layer on top of
+class ZenForTokenClassification(ZenPreTrainedModel):
+    """ZEN model for token-level classification.
+    This module is composed of the ZEN model with a linear layer on top of
     the full hidden state of the last layer.
 
     Params:
@@ -1254,20 +1309,19 @@ class BertForTokenClassification(BertPreTrainedModel):
     """
 
     def __init__(self, config, num_labels=2, output_attentions=False, keep_multihead_output=False):
-        super(BertForTokenClassification, self).__init__(config)
+        super(ZenForTokenClassification, self).__init__(config)
         self.output_attentions = output_attentions
         self.num_labels = num_labels
-        self.bert = BertModel(config, output_attentions=output_attentions,
+        self.bert = ZenModel(config, output_attentions=output_attentions,
                               keep_multihead_output=keep_multihead_output)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         self.classifier = nn.Linear(config.hidden_size, num_labels)
         self.apply(self.init_bert_weights)
 
     def forward(self, input_ids, token_type_ids=None, attention_mask=None, labels=None, valid_ids=None,
-                attention_mask_label=None, head_mask=None, b_use_valid_filter=False,
-                input_ngram_ids=None, ngram_position_matrix=None):
-        outputs = self.bert(input_ids, token_type_ids, attention_mask,
-                            output_all_encoded_layers=False, head_mask=head_mask)
+                input_ngram_ids=None, ngram_position_matrix=None, head_mask=None, b_use_valid_filter=False):
+        outputs = self.bert(input_ids, input_ngram_ids, ngram_position_matrix, token_type_ids,
+                            attention_mask=attention_mask, output_all_encoded_layers=False, head_mask=head_mask)
         if self.output_attentions:
             all_attentions, sequence_output, _ = outputs
         else:
@@ -1289,6 +1343,7 @@ class BertForTokenClassification(BertPreTrainedModel):
         if labels is not None:
             loss_fct = CrossEntropyLoss(ignore_index=0)
             # Only keep active parts of the loss
+            attention_mask_label = None
             if attention_mask_label is not None:
                 active_loss = attention_mask_label.view(-1) == 1
                 active_logits = logits.view(-1, self.num_labels)[active_loss]
@@ -1300,13 +1355,16 @@ class BertForTokenClassification(BertPreTrainedModel):
         else:
             return logits
 
-class BertForQuestionAnswering(BertPreTrainedModel):
+class ZenForQuestionAnswering(ZenPreTrainedModel):
     """BERT model for Question Answering (span extraction).
     This module is composed of the BERT model with a linear layer on top of
     the sequence output that computes start_logits and end_logits
 
     Params:
-        `config`: a BertConfig class instance with the configuration to build a new model.
+        `config`: a BertConfig class instance with the configuration to build a new model
+        `output_attentions`: If True, also output attentions weights computed by the model at each layer. Default: False
+        `keep_multihead_output`: If True, saves output of the multi-head attention module with its gradient.
+            This can be used to compute head importance metrics. Default: False
 
     Inputs:
         `input_ids`: a torch.LongTensor of shape [batch_size, sequence_length]
@@ -1325,6 +1383,8 @@ class BertForQuestionAnswering(BertPreTrainedModel):
         `end_positions`: position of the last token for the labeled span: torch.LongTensor of shape [batch_size].
             Positions are clamped to the length of the sequence and position outside of the sequence are not taken
             into account for computing the loss.
+        `head_mask`: an optional torch.Tensor of shape [num_heads] or [num_layers, num_heads] with indices between 0 and 1.
+            It's a mask to be used to nullify some heads of the transformer. 1.0 => head is fully masked, 0.0 => head is not masked.
 
     Outputs:
         if `start_positions` and `end_positions` are not `None`:
@@ -1347,17 +1407,25 @@ class BertForQuestionAnswering(BertPreTrainedModel):
     start_logits, end_logits = model(input_ids, token_type_ids, input_mask)
     ```
     """
-    def __init__(self, config):
-        super(BertForQuestionAnswering, self).__init__(config)
-        self.bert = BertModel(config)
-        # TODO check with Google if it's normal there is no dropout on the token classifier of SQuAD in the TF version
-        # self.dropout = nn.Dropout(config.hidden_dropout_prob)
+
+    def __init__(self, config, output_attentions=False, keep_multihead_output=False):
+        super(ZenForQuestionAnswering, self).__init__(config)
+        self.output_attentions = output_attentions
+        self.bert = ZenModel(config, output_attentions=output_attentions,
+                              keep_multihead_output=keep_multihead_output)
         self.qa_outputs = nn.Linear(config.hidden_size, 2)
         self.apply(self.init_bert_weights)
 
-    def forward(self, input_ids, token_type_ids=None, attention_mask=None, start_positions=None, end_positions=None,
-                input_ngram_ids=None, ngram_position_matrix=None, checkpoint_activations=False):
-        sequence_output, _ = self.bert(input_ids, token_type_ids, attention_mask, output_all_encoded_layers=False)
+    def forward(self, input_ids, input_ngram_ids, ngram_position_matrix, token_type_ids=None, attention_mask=None, start_positions=None,
+                end_positions=None, head_mask=None):
+        outputs = self.bert(input_ids, input_ngram_ids, ngram_position_matrix, token_type_ids,
+                            attention_mask=attention_mask,
+                            output_all_encoded_layers=False,
+                            head_mask=head_mask)
+        if self.output_attentions:
+            all_attentions, sequence_output, _ = outputs
+        else:
+            sequence_output, _ = outputs
         logits = self.qa_outputs(sequence_output)
         start_logits, end_logits = logits.split(1, dim=-1)
         start_logits = start_logits.squeeze(-1)
@@ -1379,5 +1447,6 @@ class BertForQuestionAnswering(BertPreTrainedModel):
             end_loss = loss_fct(end_logits, end_positions)
             total_loss = (start_loss + end_loss) / 2
             return total_loss
-        else:
-            return start_logits, end_logits
+        elif self.output_attentions:
+            return all_attentions, start_logits, end_logits
+        return start_logits, end_logits
