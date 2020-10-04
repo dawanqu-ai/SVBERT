@@ -24,8 +24,8 @@ import collections
 
 from BERT.tokenization import BertTokenizer, BasicTokenizer
 from BERT.modeling import BertForQuestionAnswering
-from ZEN.modeling import ZenForQuestionAnswering
-from ZEN.ngram_utils import ZenNgramDict
+from BERT.modeling_zen import ZenForQuestionAnswering
+from BERT.ngram_utils import ZenNgramDict
 
 CONFIG_NAME = "config.json"
 WEIGHTS_NAME = "pytorch_model.bin"
