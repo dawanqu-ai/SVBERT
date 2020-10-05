@@ -212,7 +212,7 @@ class NliInference():
             )
         return features
 
-    def inference(self, text_a=None, text_b=None, texts=None, print_msg=True):
+    def inference(self, premise=None, hypothesis=None, texts=None, print_msg=True):
         if self.model is None:
             print("please load model first")
             return
@@ -223,8 +223,8 @@ class NliInference():
                     return False
             return True
 
-        if isinstance(text_a, str) and isinstance(text_b, str):
-            texts = [[text_a,text_b]]
+        if isinstance(premise, str) and isinstance(hypothesis, str):
+            texts = [[premise, hypothesis]]
             labels, pred_scores = self._inference(texts)
             result = {
                 "text": texts[0],
