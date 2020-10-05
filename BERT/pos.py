@@ -28,6 +28,7 @@ from BERT.modeling import BertForTokenClassification
 from BERT.modeling_zen import ZenForTokenClassification
 from BERT.ngram_utils import ZenNgramDict
 
+
 CONFIG_NAME = "config.json"
 WEIGHTS_NAME = "pytorch_model.bin"
 NGRAM_DICT_NAME = 'ngram.txt'
@@ -39,7 +40,7 @@ MODEL_NAME_DICT = {
 
 InputFeatures = namedtuple(
     "InputFeatures",
-    "input_ids input_mask segment_ids original_token ngram_ids ngram_positions")
+    "input_ids input_mask segment_ids original_token ngram_ids ngram_positions valid_ids b_use_valid_filter")
 
 def char_is_chinese_or_puntuation(char):
     if BasicTokenizer()._is_chinese_char(ord(char)) is True:
@@ -56,43 +57,26 @@ def is_alpha(ch):
         return True
     return False
 
-def pos_parse(text,label):
-    text_len = len(text)
-    label_len = len(label)
-    min_len = min(text_len, label_len)
-    for i in range(min_len - 2):
-        if label[min_len-i-2][:1] in ["B", "I"] and label[min_len-i-1][:1] in ["O"] and label[min_len-i][:1] in ["I"]:
-            label[min_len-i-1] = label[min_len-i]
-    res = []
-    tmp = []
-    tag = None
-    label_idx = -1
+def pos_parse(text, valid, label):
+    new_text = []
+    token = ""
     for i in range(len(text)):
-        if label_idx >= len(label)-1:
+        if valid[i] == 0:
+            token += text[i].replace("##","")
             continue
-        if text[i] in [" "]:
-            if len(tmp) > 0:
-                tmp.append(" ")
-            continue
-        isalpha_not_split = False
-        if i > 0 and is_alpha(text[i-1][-1]) and is_alpha(text[i][0]):
-            isalpha_not_split = True
-        label_idx += 1
-        pos_tagging = label[label_idx].split("-")
-        if pos_tagging[0] in ["S","B"] and isalpha_not_split is False:
-            if tmp and tag:
-                res.append((''.join(tmp), tag))
-            tmp = []
-            tag = None
-        if pos_tagging[0] == "S" and isalpha_not_split is False:
-            res.append((text[i], pos_tagging[1]))
-            continue
-        tmp.append(text[i])
-        tag = pos_tagging[1]
-        if pos_tagging[0] == "E" and isalpha_not_split is False:
-            res.append((''.join(tmp), tag))
-            tmp = []
-            tag = None
+        if len(token) > 0:
+            new_text.append(token)
+        token = text[i].replace("##","")
+    if len(token) > 0:
+        new_text.append(token)
+    text = new_text
+    res = []
+    for i in range(len(text)):
+        res.append({
+            "word": text[i],
+            "label": label[i]
+        })
+
     return res
 
 class PosInference():
@@ -157,19 +141,23 @@ class PosInference():
         all_input_ids = torch.tensor([f.input_ids for f in features], dtype=torch.long).to(self.device)
         all_input_mask = torch.tensor([f.input_mask for f in features], dtype=torch.long).to(self.device)
         all_segment_ids = torch.tensor([f.segment_ids for f in features], dtype=torch.long).to(self.device)
+        all_valid_ids = torch.tensor([f.valid_ids for f in features], dtype=torch.long).to(self.device)
         all_ngram_ids = torch.tensor([f.ngram_ids for f in features], dtype=torch.long).to(self.device)
         all_ngram_positions = torch.tensor([f.ngram_positions for f in features], dtype=torch.long).to(self.device)
+        all_b_use_valid_filter = [f.b_use_valid_filter for f in features]
 
         with torch.no_grad():
             logits = model(all_input_ids,
                            attention_mask=all_input_mask,
                            token_type_ids=all_segment_ids,
+                           valid_ids=all_valid_ids,
                            input_ngram_ids=all_ngram_ids,
-                           ngram_position_matrix=all_ngram_positions)
+                           ngram_position_matrix=all_ngram_positions,
+                           b_use_valid_filter=all_b_use_valid_filter)
 
         preds = torch.argmax(F.log_softmax(logits, dim=2), dim=2).detach().cpu().numpy()
         labels = [[label_map.get(str(x), "O") for x in pred] for pred in preds]
-        return [pos_parse(text, label[1:]) for text, label in zip(all_original_token, labels)]
+        return [pos_parse(text, valid[1:], label[1:]) for text, valid, label in zip(all_original_token, all_valid_ids.detach().cpu().numpy(), labels)]
 
     def extract_ngram(self, tokens, max_seq_length):
         ngram_matches = []
@@ -211,26 +199,42 @@ class PosInference():
         tokenizer = self.tokenizer
 
         features = []
+        b_use_valid_filter = False
         for _i, text in enumerate(texts):
-            tokens, ori_tokens = tokenizer.tokenize(text)
+            tokens, ori_tokens = [], []
+            valid = []
+            for i, sub_text in enumerate(text.split(" ")):
+                sub_tokens, sub_ori_tokens = tokenizer.tokenize(sub_text)
+                tokens.extend(sub_tokens)
+                ori_tokens.extend(sub_ori_tokens)
+                for m in range(len(sub_tokens)):
+                    if m == 0:
+                        valid.append(1)
+                    else:
+                        valid.append(0)
+                        b_use_valid_filter = True
             if len(tokens) >= max_seq_length - 1:
                 tokens = tokens[0:(max_seq_length - 2)]
+                valid = valid[0:(max_seq_length - 2)]
 
             ntokens = []
             segment_ids = []
             ntokens.append("[CLS]")
             segment_ids.append(0)
+            valid.insert(0, 1)
             for i, token in enumerate(tokens):
                 ntokens.append(token)
                 segment_ids.append(0)
             ntokens.append("[SEP]")
             segment_ids.append(0)
+            valid.append(1)
             input_ids = tokenizer.convert_tokens_to_ids(ntokens)
             input_mask = [1] * len(input_ids)
             while len(input_ids) < max_seq_length:
                 input_ids.append(0)
                 input_mask.append(0)
                 segment_ids.append(0)
+                valid.append(1)
 
             assert len(input_ids) == max_seq_length
             assert len(input_mask) == max_seq_length
@@ -248,7 +252,9 @@ class PosInference():
                     segment_ids=segment_ids,
                     original_token=ori_tokens,
                     ngram_ids=ngram_ids,
-                    ngram_positions=ngram_positions_matrix
+                    ngram_positions=ngram_positions_matrix,
+                    valid_ids=valid,
+                    b_use_valid_filter=b_use_valid_filter
                 )
             )
         return features
