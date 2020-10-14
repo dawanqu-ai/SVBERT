@@ -164,13 +164,14 @@ class MrcInference():
             unique_id_to_result[result.unique_id] = result
 
         answers = []
-        for text_index,text in enumerate(texts):
+        for text_index, text in enumerate(texts):
             text_features = text_index_to_features[text_index]
             text_results = [unique_id_to_result[feature.unique_id] for feature in text_features]
-            text_answer = self.answer_parsing(text_features, text_results)
+            text_answer, score = self.answer_parsing(text_features, text_results)
             answers.append({
                 "text": text,
-                "answer": text_answer
+                "answer": text_answer,
+                "score": score
             })
         return answers
 
@@ -252,9 +253,9 @@ class MrcInference():
                     end_logit=pred.end_logit))
 
         if not nbest:
-            return "empty"
+            return "empty", 0
         else:
-            return nbest[0].text
+            return nbest[0].text, (nbest[0].start_logit + nbest[0].end_logit) / 2
 
     def get_final_text(self, pred_text, orig_text, do_lower_case):
         """Project the tokenized prediction back to the original text."""
