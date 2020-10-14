@@ -255,7 +255,10 @@ class MrcInference():
         if not nbest:
             return "empty", 0
         else:
-            return nbest[0].text, (nbest[0].start_logit + nbest[0].end_logit) / 2
+            scores = [(one.start_logit + one.end_logit) / 2 for one in nbest]
+            scores_sum = sum(scores)
+            scores = [x / scores_sum for x in scores]
+            return nbest[0].text, scores[0]
 
     def get_final_text(self, pred_text, orig_text, do_lower_case):
         """Project the tokenized prediction back to the original text."""
