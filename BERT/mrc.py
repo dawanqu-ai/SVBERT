@@ -256,6 +256,7 @@ class MrcInference():
             return "empty", 0
         else:
             scores = [(one.start_logit + one.end_logit) / 2 for one in nbest]
+            scores = [x + (np.abs(min(scores)) - min(scores)) / 2 for x in scores]
             scores_sum = sum(scores)
             scores = [x / scores_sum for x in scores]
             return nbest[0].text, scores[0]
